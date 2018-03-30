@@ -1,85 +1,81 @@
-/*
- * Copyright 2013 Google Inc.
- * Copyright 2014 Andreas Schildbach
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
-package org.bitcoinj.examples;
-
-import org.bitcoinj.core.Address;
-import org.bitcoinj.core.Coin;
-import org.bitcoinj.core.InsufficientMoneyException;
-import org.bitcoinj.core.LegacyAddress;
-import org.bitcoinj.core.NetworkParameters;
-import org.bitcoinj.core.Transaction;
-import org.bitcoinj.core.TransactionConfidence;
-import org.bitcoinj.crypto.KeyCrypterException;
-import org.bitcoinj.kits.WalletAppKit;
-import org.bitcoinj.params.MainNetParams;
-import org.bitcoinj.params.RegTestParams;
-import org.bitcoinj.params.TestNet3Params;
-import org.bitcoinj.utils.BriefLogFormatter;
-import org.bitcoinj.wallet.SendRequest;
-import org.bitcoinj.wallet.Wallet;
-import org.bitcoinj.wallet.listeners.WalletCoinsReceivedEventListener;
 
 import com.google.common.util.concurrent.FutureCallback;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.MoreExecutors;
+import org.bitcoinj.core.*;
+import org.bitcoinj.crypto.KeyCrypterException;
+import org.bitcoinj.kits.WalletAppKit;
+import org.bitcoinj.params.MainNetParams;
+import org.bitcoinj.params.RegTestParams;
+import org.bitcoinj.utils.BriefLogFormatter;
+import org.bitcoinj.wallet.AllowUnconfirmedCoinSelector;
+import org.bitcoinj.wallet.SendRequest;
+import org.bitcoinj.wallet.Wallet;
+import org.bitcoinj.wallet.listeners.WalletCoinsReceivedEventListener;
 
 import java.io.File;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
+
 /**
- * ForwardingService demonstrates basic usage of the library. It sits on the network and when it receives coins, simply
- * sends them onwards to an address given on the command line.
+ * ForwardingService sits on the bitcoin main network and when it receives coins in the selected wallet,
+ * it sends them onwards to an address given.
  */
 public class ForwardingService {
+
+    //
+//
+    //    Modify the following parameters:
+//    Private key of the address that needs to be monitored and have the funds forwarded from.
+//    Private key also includes the public key/address so no need for that
+    private static final String privateKey = "xxxx";
+    //    Fee type is used to calculate the speed of confirming a transaction
+//    FASTESTFEE: The lowest fee (in satoshis per byte) that will currently result in the fastest transaction confirmations (usually 0 to 1 block delay).
+//    HALFHOURFEE: The lowest fee (in satoshis per byte) that will confirm transactions within half an hour (with 90% probability).
+//    HOURFEE: The lowest fee (in satoshis per byte) that will confirm transactions within an hour (with 90% probability).
+    private static final String feeType = FeeCalculator.FASTEST;
+    //   Public key/address that will receive the forwarded funds
+    private static final String addressForForwarding = "1FMw2Tr1tJj1JyD2udpthvY6VtbwrYReqT";
+//
+//
+
+
     private static Address forwardingAddress;
     private static WalletAppKit kit;
+
 
     public static void main(String[] args) throws Exception {
         // This line makes the log output more compact and easily read, especially when using the JDK log adapter.
         BriefLogFormatter.init();
-        if (args.length < 1) {
-            System.err.println("Usage: address-to-send-back-to [regtest|testnet]");
-            return;
-        }
 
         // Figure out which network we should connect to. Each one gets its own set of files.
         NetworkParameters params;
         String filePrefix;
-        if (args.length > 1 && args[1].equals("testnet")) {
-            params = TestNet3Params.get();
-            filePrefix = "forwarding-service-testnet";
-        } else if (args.length > 1 && args[1].equals("regtest")) {
-            params = RegTestParams.get();
-            filePrefix = "forwarding-service-regtest";
-        } else {
-            params = MainNetParams.get();
-            filePrefix = "forwarding-service";
-        }
+
+        params = MainNetParams.get();
+        filePrefix = "forwarding-service";
+
         // Parse the address given as the first parameter.
-        forwardingAddress = LegacyAddress.fromBase58(params, args[0]);
+        forwardingAddress = LegacyAddress.fromBase58(params, addressForForwarding);
 
         System.out.println("Network: " + params.getId());
         System.out.println("Forwarding address: " + forwardingAddress);
 
         // Start up a basic app using a class that automates some boilerplate.
-        kit = new WalletAppKit(params, new File("."), filePrefix);
+        kit = new WalletAppKit(params, new File("."), filePrefix) {
+            @Override
+            protected void onSetupCompleted() {
+                // This is called in a background thread after startAndWait is called, as setting up various objects
+                // can do disk and network IO that may cause UI jank/stuttering in wallet apps if it were to be done
+                // on the main thread.
 
+                ECKey key = DumpedPrivateKey.fromBase58(MainNetParams.get(), privateKey).getKey();
+
+                System.out.println("Address from private key is: " + LegacyAddress.fromKey(params, key).toString());
+                wallet().importKey(key);
+            }
+        };
         if (params == RegTestParams.get()) {
             // Regression test mode is designed for testing and development only, so there's no public network for it.
             // If you pick this mode, you're expected to be running a local "bitcoind -regtest" instance.
@@ -123,18 +119,30 @@ public class ForwardingService {
         });
 
         Address sendToAddress = LegacyAddress.fromKey(params, kit.wallet().currentReceiveKey());
-        System.out.println("Send coins to: " + sendToAddress);
-        System.out.println("Waiting for coins to arrive. Press Ctrl-C to quit.");
+        System.out.println("Send coins to: " + sendToAddress + "if you");
+        System.out.println("Waiting for coins to arrive to " + sendToAddress);
+        System.out.println("Press Ctrl-C to quit");
 
         try {
             Thread.sleep(Long.MAX_VALUE);
-        } catch (InterruptedException ignored) {}
+        } catch (InterruptedException ignored) {
+        }
     }
 
     private static void forwardCoins(Transaction tx) {
         try {
-            // Now send the coins onwards.
+
+            //Calculating selected fee type
+            Coin fee = Coin.valueOf(FeeCalculator.extractOptimalFee(feeType));
+            System.out.println("Forwarding coins");
+
+            System.out.println("Retrieving fee +" + fee.toFriendlyString());
+            System.out.println("Retrieving fee +" + fee.toPlainString());
             SendRequest sendRequest = SendRequest.emptyWallet(forwardingAddress);
+            sendRequest.feePerKb = fee;
+            sendRequest.emptyWallet = true;
+            sendRequest.coinSelector = AllowUnconfirmedCoinSelector.get();
+
             Wallet.SendResult sendResult = kit.wallet().sendCoins(sendRequest);
             checkNotNull(sendResult);  // We should never try to send more coins than we have!
             System.out.println("Sending ...");
@@ -153,4 +161,5 @@ public class ForwardingService {
             throw new RuntimeException(e);
         }
     }
+
 }
